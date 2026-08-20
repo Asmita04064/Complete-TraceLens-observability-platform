@@ -1,145 +1,932 @@
-# TraceLens
+# TraceLens 🔍
 
-TraceLens is an agent execution observability platform for inspecting how AI workflows use models, tools, and databases.
+### AI Agent Execution Observability Platform
 
-## Problem
+TraceLens is an observability platform for understanding **how an AI-powered application executes a request**.
 
-AI agents perform multiple steps involving LLMs, tools, databases, and APIs. Without observability, developers cannot quickly understand what happened, where latency occurred, which component failed, or how execution flowed.
+Instead of treating logs as isolated messages, TraceLens reconstructs an agent execution as a structured **trace** containing individual events such as LLM calls, tool invocations, and database queries.
 
-## Solution
+> **TraceLens answers the question: "What exactly happened during this AI execution?"**
 
-TraceLens records each execution as a trace and each model, tool, or database operation as an event. Parent-child relationships, statuses, durations, and summaries make an agent run understandable at a glance.
+---
 
-## Architecture
+## 🚀 Why TraceLens?
+
+Modern AI applications are rarely a single model call.
+
+A single user request can trigger:
 
 ```text
-React dashboard
-      |
-      v
-FastAPI
-      |
-      v
-SQLAlchemy
-      |
-      v
-PostgreSQL
+User Request
+      ↓
+    Agent
+      ↓
+     LLM
+      ↓
+    Tool
+      ↓
+   Database
+      ↓
+     LLM
+      ↓
+Final Response
 ```
 
-## Features
+When an execution becomes slow or fails, traditional application logs make it difficult to reconstruct:
 
-- Trace creation and completion/failure
-- Event tracking for LLM, tool, and database operations
-- Parent-child execution relationships
-- Trace summaries and latency analysis
-- Searchable, filterable dashboard
-- Execution timeline with event status and duration
-- Idempotent demo data seeding
+* Which operations executed?
+* In what order?
+* Which component caused the failure?
+* Which operation consumed the most time?
+* What triggered a particular operation?
+* What was the final state of the execution?
 
-## Tech Stack
+TraceLens provides a structured view of this execution journey.
 
-- Frontend: React, Vite, CSS, native Fetch API
-- Backend: Python, FastAPI, SQLAlchemy, Pydantic
-- Database: PostgreSQL
+---
 
-## API Endpoints
+# 🎯 Core Concept
 
-| Method | Endpoint | Purpose |
-| --- | --- | --- |
-| GET | `/health` | Health check |
-| POST | `/traces` | Create a running trace |
-| GET | `/traces` | List traces for the dashboard |
-| POST | `/traces/{trace_id}/events` | Add an execution event |
-| POST | `/traces/{trace_id}/complete` | Complete a trace with output |
-| POST | `/traces/{trace_id}/fail` | Fail a trace with an error message |
-| GET | `/traces/{trace_id}` | Get trace details and ordered events |
-| GET | `/traces/{trace_id}/summary` | Get event counts and duration breakdown |
+A **trace** represents one complete agent execution.
 
-## Database Schema
+Each operation within that execution is stored as an **event**.
 
-`traces` stores the execution identity, input, output, status, timestamps, and total duration. `trace_events` stores each operation, its sequence number, component, status, duration, and optional `parent_event_id` foreign key back to another event in the same trace.
+```text
+                        TRACE
+                          │
+        ┌─────────────────┼─────────────────┐
+        │                 │                 │
+     LLM Call          Tool Call        DB Query
+        │                 │                 │
+     842 ms            120 ms             35 ms
+     SUCCESS           SUCCESS           SUCCESS
+        │
+        └──── parent_event_id ────┐
+                                  ▼
+                              Child Event
+```
 
-## Running Locally
+Each event preserves:
 
-PostgreSQL must be running on port `5433` with a database named `tracelens`. Configure the connection in the root `.env`:
+* Execution order
+* Parent-child relationship
+* Component
+* Event type
+* Status
+* Duration
+* Timestamp
+* Input/output
+* Error information
+* Metadata
+
+This allows TraceLens to reconstruct the execution rather than displaying disconnected logs.
+
+---
+
+# ✨ Features
+
+### Trace Lifecycle
+
+```text
+CREATE
+  ↓
+RUNNING
+  ↓
+COMPLETED
+```
+
+or
+
+```text
+CREATE
+  ↓
+RUNNING
+  ↓
+FAILED
+```
+
+Invalid lifecycle transitions are rejected by the API.
+
+---
+
+### Event Tracking
+
+TraceLens currently supports:
+
+```text
+LLM Call
+Tool Call
+Database Query
+```
+
+The event model is designed to be extensible for additional operation types.
+
+---
+
+### Execution Ordering
+
+Every event receives a:
+
+```text
+sequence_number
+```
+
+Example:
+
+```text
+1 → LLM
+2 → Tool
+3 → Database
+4 → LLM
+```
+
+Repeated operations are intentionally preserved as separate events.
+
+This means three LLM calls remain three distinct events instead of being incorrectly merged into one.
+
+---
+
+### Parent-Child Lineage
+
+Events can reference their parent using:
+
+```text
+parent_event_id
+```
+
+Example:
+
+```text
+LLM Call
+   │
+   └── Tool Call
+          │
+          └── Database Query
+```
+
+This provides execution lineage rather than just chronological logs.
+
+---
+
+### Latency Analysis
+
+Every event records its execution duration.
+
+Example:
+
+```text
+Gemini LLM        842 ms
+Order Service     120 ms
+PostgreSQL         35 ms
+```
+
+This makes latency bottlenecks easier to identify.
+
+---
+
+### Failure Tracking
+
+Failures are represented at both event and trace level.
+
+```text
+Trace
+ │
+ ├── LLM          ✓ SUCCESS
+ │
+ ├── Tool         ✓ SUCCESS
+ │
+ ├── Database     ✗ FAILED
+ │
+ └── Trace        ✗ FAILED
+```
+
+The failed event retains its error information for inspection.
+
+---
+
+# 🏗️ Architecture
+
+```text
+                     ┌──────────────────────┐
+                     │      React UI        │
+                     │                      │
+                     │  Dashboard           │
+                     │  Trace Explorer      │
+                     │  Timeline            │
+                     │  Latency Analysis    │
+                     └──────────┬───────────┘
+                                │
+                           HTTP / JSON
+                                │
+                                ▼
+                     ┌──────────────────────┐
+                     │       FastAPI        │
+                     │                      │
+                     │  Trace APIs          │
+                     │  Event APIs          │
+                     │  Summary APIs        │
+                     │  Validation          │
+                     └──────────┬───────────┘
+                                │
+                                ▼
+                     ┌──────────────────────┐
+                     │      SQLAlchemy      │
+                     │                      │
+                     │       ORM            │
+                     │    Transactions      │
+                     └──────────┬───────────┘
+                                │
+                                ▼
+                     ┌──────────────────────┐
+                     │     PostgreSQL       │
+                     │                      │
+                     │      traces          │
+                     │    trace_events      │
+                     └──────────────────────┘
+```
+
+---
+
+# 🧩 System Execution Model
+
+```text
+                    Agent Request
+                         │
+                         ▼
+                   Create Trace
+                         │
+              ┌──────────┴──────────┐
+              │                     │
+              ▼                     ▼
+           LLM Call              LLM Call
+              │
+              ▼
+          Tool Call
+              │
+              ▼
+        Database Query
+              │
+              ▼
+        Final Response
+              │
+              ▼
+        Complete Trace
+```
+
+The important distinction is:
+
+```text
+System Architecture
+        ≠
+Individual Trace
+```
+
+The architecture describes how TraceLens itself works.
+
+The trace describes how an observed AI application executed.
+
+---
+
+# 🗄️ Database Design
+
+TraceLens uses two primary relational entities.
+
+## `traces`
+
+Stores one record for each execution.
+
+```text
+traces
+────────────────────────────
+id
+trace_id
+input
+output
+status
+started_at
+completed_at
+duration_ms
+```
+
+## `trace_events`
+
+Stores individual operations.
+
+```text
+trace_events
+────────────────────────────
+id
+event_id
+trace_id
+parent_event_id
+sequence_number
+event_type
+component
+timestamp
+duration_ms
+status
+input_data
+output_data
+error_message
+metadata
+```
+
+### Relationship
+
+```text
+traces
+   │
+   │ 1
+   │
+   │ N
+   ▼
+trace_events
+   │
+   │
+   └──── parent_event_id
+              │
+              ▼
+        trace_events
+```
+
+The separation allows a trace to contain a variable number of events while preserving relational integrity.
+
+---
+
+# 📊 Trace Explorer
+
+The Trace Explorer provides a detailed view of an individual execution.
+
+Example:
+
+```text
+Trace: tr_7bdfd909e3b6
+
+1. LLM Call
+   Gemini
+   842 ms
+   ✓ SUCCESS
+       │
+       ▼
+2. Tool Call
+   Order Service
+   120 ms
+   ✓ SUCCESS
+       │
+       ▼
+3. Database Query
+   PostgreSQL
+   35 ms
+   ✓ SUCCESS
+       │
+       ▼
+4. Final Response
+```
+
+The operator can inspect:
+
+* Event type
+* Component
+* Status
+* Duration
+* Sequence number
+* Parent event
+* Error details
+* Trace summary
+
+---
+
+# 📈 Trace Summary
+
+TraceLens aggregates execution information into a trace-level summary.
+
+Example:
+
+```json
+{
+  "trace_id": "tr_7bdfd909e3b6",
+  "status": "completed",
+  "total_events": 3,
+  "successful_events": 3,
+  "failed_events": 0,
+  "total_event_duration_ms": 997,
+  "llm_duration_ms": 842,
+  "tool_duration_ms": 120,
+  "database_duration_ms": 35
+}
+```
+
+This creates a useful investigation flow:
+
+```text
+System Health
+      ↓
+    Trace
+      ↓
+    Event
+      ↓
+Latency / Failure
+```
+
+---
+
+# 🔌 API
+
+| Method | Endpoint                      | Purpose           |
+| ------ | ----------------------------- | ----------------- |
+| `GET`  | `/health`                     | Health check      |
+| `POST` | `/traces`                     | Create trace      |
+| `GET`  | `/traces`                     | List traces       |
+| `POST` | `/traces/{trace_id}/events`   | Add event         |
+| `POST` | `/traces/{trace_id}/complete` | Complete trace    |
+| `POST` | `/traces/{trace_id}/fail`     | Fail trace        |
+| `GET`  | `/traces/{trace_id}`          | Get trace         |
+| `GET`  | `/traces/{trace_id}/summary`  | Get trace summary |
+
+Interactive API documentation:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+---
+
+# 🛡️ Validation & Error Handling
+
+TraceLens validates execution state at the API layer.
+
+### Missing Trace
+
+```text
+404 Trace not found
+```
+
+### Event After Completion
+
+```text
+400 Cannot add events to a completed or failed trace
+```
+
+### Invalid Parent Event
+
+```text
+400 Parent event does not exist in this trace
+```
+
+### Invalid Lifecycle Transition
+
+A completed or failed trace cannot be completed or failed again.
+
+These validations prevent corrupted execution histories.
+
+---
+
+# 🧠 Engineering Decisions
+
+## Why PostgreSQL?
+
+Trace data has clear relationships:
+
+```text
+Trace → Events → Parent Events
+```
+
+PostgreSQL provides:
+
+* Relational integrity
+* Transactions
+* Structured querying
+* Indexing
+* Reliable persistence
+
+---
+
+## Why FastAPI?
+
+FastAPI provides:
+
+* Request validation
+* Typed API contracts
+* Automatic OpenAPI documentation
+* Lightweight Python development
+* Easy integration with the AI/ML ecosystem
+
+---
+
+## Why React?
+
+Trace investigation requires an interactive interface rather than static logs.
+
+React enables:
+
+* Dynamic trace selection
+* Filtering
+* Timeline rendering
+* State management
+* Interactive execution inspection
+
+---
+
+## Why Not LangGraph?
+
+TraceLens is an **observability layer**, not an agent framework.
+
+Introducing LangGraph would increase architectural complexity without solving the core problem of capturing and inspecting execution traces.
+
+The system is designed to observe an existing AI workflow rather than dictate how that workflow is implemented.
+
+---
+
+# ⚖️ Engineering Trade-offs
+
+A production-grade distributed tracing platform could look like:
+
+```text
+AI Application
+      ↓
+Instrumentation SDK
+      ↓
+OpenTelemetry
+      ↓
+Trace Collector
+      ↓
+Message Queue
+      ↓
+Distributed Storage
+      ↓
+TraceLens API
+      ↓
+React UI
+```
+
+TraceLens intentionally uses a smaller architecture:
+
+```text
+Application
+     ↓
+FastAPI
+     ↓
+PostgreSQL
+     ↓
+React
+```
+
+### Why?
+
+The MVP prioritizes:
+
+* Correctness
+* Explainability
+* Low infrastructure complexity
+* Fast development
+* Clear trace reconstruction
+
+The production architecture would be more scalable, but would introduce significantly more operational complexity.
+
+---
+
+# ⚠️ Current Limitations
+
+TraceLens is an MVP rather than a production distributed tracing platform.
+
+Current limitations:
+
+* Instrumentation is application-level rather than automatic.
+* No OpenTelemetry collector.
+* No distributed context propagation.
+* No authentication or authorization.
+* No real-time event streaming.
+* PostgreSQL is currently the persistence dependency.
+* Input/output capture depends on what the instrumented application provides.
+
+These limitations are intentional and documented.
+
+---
+
+# 🔮 Future Roadmap
+
+### Observability
+
+* [ ] OpenTelemetry integration
+* [ ] Automatic instrumentation
+* [ ] Distributed context propagation
+* [ ] Real-time trace streaming
+
+### AI-specific observability
+
+* [ ] LLM token tracking
+* [ ] LLM cost tracking
+* [ ] Model comparison
+* [ ] Prompt/response inspection
+* [ ] AI latency analytics
+
+### Platform
+
+* [ ] Authentication
+* [ ] Role-based access control
+* [ ] Trace comparison
+* [ ] Advanced filtering
+* [ ] Production cloud deployment
+
+---
+
+# 🧪 Demo Scenario
+
+A sample AI workflow:
+
+```text
+User:
+"Where is my order?"
+```
+
+Execution:
+
+```text
+User Request
+      ↓
+Gemini
+      ↓
+Order Service
+      ↓
+PostgreSQL
+      ↓
+Gemini
+      ↓
+Final Response
+```
+
+During a demonstration, the following capabilities can be shown:
+
+1. Create a trace
+2. Record multiple events
+3. Preserve event ordering
+4. Create parent-child relationships
+5. Display event latency
+6. Complete a trace
+7. Generate a trace summary
+8. Inspect a failed execution
+9. Reject invalid state transitions
+
+---
+
+# 💻 Running Locally
+
+## Prerequisites
+
+* Python 3.x
+* Node.js
+* PostgreSQL
+* PostgreSQL running on port `5433`
+* Database: `tracelens`
+
+Create `.env`:
 
 ```env
 DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5433/tracelens
 ```
 
-Backend:
+---
+
+## Backend
 
 ```powershell
 cd backend
+
 python -m venv .venv
+
 .venv\Scripts\Activate.ps1
+
 pip install -r requirements.txt
+
 python create_tables.py
+
 uvicorn app.main:app --reload
 ```
 
-Frontend (in a second terminal):
+Backend:
+
+```text
+http://127.0.0.1:8000
+```
+
+Swagger:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+---
+
+## Frontend
+
+Open another terminal:
 
 ```powershell
 cd frontend
+
 npm install
+
 npm run dev
 ```
 
-Open http://localhost:5173.
+Frontend:
 
-## Demo Data
+```text
+http://localhost:5173
+```
 
-With the backend environment active, run:
+---
+
+# 🌱 Demo Data
+
+Run:
 
 ```powershell
 cd backend
+
 python seed_demo.py
 ```
 
-The script creates three realistic traces: an order lookup, a declined payment investigation, and a failed order cancellation. It skips traces with the same input, so repeated runs do not duplicate demo data.
+The seed generates representative traces containing:
 
-## Demo Flow
+* LLM calls
+* Tool calls
+* Database queries
+* Parent-child relationships
+* Successful executions
+* Failed executions
+* Event durations
 
-1. Start PostgreSQL, the backend, and the frontend.
-2. Run `python seed_demo.py` from `backend`.
-3. Open the dashboard and point out total, completed, failed, and average-duration metrics.
-4. Search for `order` and open the order lookup trace.
-5. Walk down the timeline from Gemini to Order Service to PostgreSQL.
-6. Explain the parent event labels and the latency breakdown.
-7. Open the failed cancellation trace and show the failed tool event.
-8. Use the API examples below to create a fresh running trace, add events, and complete it.
+The seed process is designed to avoid unnecessary duplication of existing demo traces.
 
-## API Demo Calls
+---
 
-```powershell
-$trace = Invoke-RestMethod -Method Post http://127.0.0.1:8000/traces -ContentType 'application/json' -Body '{"input":"Where is my order?"}'
-$id = $trace.trace_id
-$llm = Invoke-RestMethod -Method Post "http://127.0.0.1:8000/traces/$id/events" -ContentType 'application/json' -Body '{"event_type":"llm_call","component":"gemini","sequence_number":1,"status":"success","duration_ms":842}'
-$tool = Invoke-RestMethod -Method Post "http://127.0.0.1:8000/traces/$id/events" -ContentType 'application/json' -Body (ConvertTo-Json @{event_type='tool_call';component='order_service';sequence_number=2;status='success';duration_ms=120;parent_event_id=$llm.id})
-Invoke-RestMethod -Method Post "http://127.0.0.1:8000/traces/$id/events" -ContentType 'application/json' -Body (ConvertTo-Json @{event_type='database_query';component='postgresql';sequence_number=3;status='success';duration_ms=35;parent_event_id=$tool.id})
-Invoke-RestMethod -Method Post "http://127.0.0.1:8000/traces/$id/complete" -ContentType 'application/json' -Body '{"output":"Your order is currently out for delivery."}'
+# 📁 Project Structure
+
+```text
+TraceLens/
+│
+├── backend/
+│   ├── app/
+│   │   ├── main.py
+│   │   ├── models.py
+│   │   ├── schemas.py
+│   │   └── database.py
+│   │
+│   ├── create_tables.py
+│   ├── seed_demo.py
+│   └── requirements.txt
+│
+├── frontend/
+│   ├── src/
+│   │   ├── App.jsx
+│   │   ├── traces.js
+│   │   └── ...
+│   │
+│   ├── package.json
+│   └── vite.config.js
+│
+├── .env.example
+├── README.md
+└── ...
 ```
 
-Expected result: the trace becomes `completed`, receives a calculated duration, and appears in the dashboard after refresh. A completed or failed trace returns HTTP 400 when a new event is posted. A missing trace returns HTTP 404.
+---
 
-## Two-Minute Presentation
+# 🧪 Example API Flow
 
-“AI agents are not single operations. They call an LLM, invoke tools, query data, and then produce an answer. When one of those steps is slow or fails, ordinary logs make the execution difficult to reconstruct. TraceLens solves this by treating one agent run as a trace and every operation as a connected event. The React dashboard calls FastAPI, which persists the trace and its events through SQLAlchemy in PostgreSQL. Each event has a sequence number, status, duration, and optional parent event, so the execution path is visible from Gemini to a service to a database. The dashboard gives an operator the high-level health metrics first, then a searchable trace list, then a detailed timeline and latency breakdown for inspection. In the demo, I can create a trace, add three events, complete it, and immediately see the metrics update. I can also show a failed tool event and the API correctly preventing writes after failure. The next stage would add distributed tracing, OpenTelemetry instrumentation, real LLM instrumentation, authentication, streaming, and advanced latency analytics.”
+### 1. Create Trace
 
-## Likely Viva Questions
+```http
+POST /traces
+```
 
-**Why use a separate event table?** A trace is the execution container; events are the variable-length operations inside it. This keeps the model normalized and queryable.
+```json
+{
+  "input": "Where is my order?"
+}
+```
 
-**How are relationships represented?** `parent_event_id` references another event in the same trace, while `sequence_number` preserves display order.
+### 2. Add LLM Event
 
-**How is latency calculated?** Event latency is stored as `duration_ms`; completed and failed trace latency is calculated from start and completion timestamps.
+```http
+POST /traces/{trace_id}/events
+```
 
-**How do you prevent invalid execution state?** The API checks that a trace exists, is still running, has unique sequence numbers, and has a valid parent event before insertion.
+```json
+{
+  "event_type": "llm_call",
+  "component": "gemini",
+  "sequence_number": 1,
+  "status": "success",
+  "duration_ms": 842
+}
+```
 
-**What happens when a component fails?** The event stores `status=failed` and an error message, and the trace can be finalized as failed with its elapsed duration.
+### 3. Add Child Tool Event
 
-**What would you improve next?** Distributed trace IDs, OpenTelemetry, real instrumentation, authentication, real-time streaming, and richer latency analytics.
+```json
+{
+  "event_type": "tool_call",
+  "component": "order_service",
+  "sequence_number": 2,
+  "status": "success",
+  "duration_ms": 120,
+  "parent_event_id": "..."
+}
+```
 
-## Future Improvements
+### 4. Complete Trace
 
-Distributed tracing, OpenTelemetry integration, real LLM instrumentation, authentication, cloud deployment, real-time streaming, and advanced latency analytics are future work and are not implemented in this MVP.
+```http
+POST /traces/{trace_id}/complete
+```
+
+```json
+{
+  "output": "Your order is currently out for delivery."
+}
+```
+
+---
+
+# 🎥 Demo
+
+> Add your best UI screenshot or short demo GIF here.
+
+Recommended screenshots:
+
+### Dashboard
+
+```text
+[ INSERT DASHBOARD SCREENSHOT ]
+```
+
+### Trace Explorer
+
+```text
+[ INSERT TRACE TIMELINE SCREENSHOT ]
+```
+
+### Architecture
+
+```text
+[ INSERT SYSTEM ARCHITECTURE / EXCALIDRAW DIAGRAM ]
+```
+
+A reviewer should be able to understand the project visually before reading the implementation details.
+
+---
+
+# 🏆 Why TraceLens?
+
+TraceLens is designed around a simple principle:
+
+> **AI systems should not be black boxes during execution.**
+
+Instead of asking:
+
+```text
+"Why did this request fail?"
+```
+
+an engineer should be able to inspect:
+
+```text
+Which execution?
+        ↓
+Which event?
+        ↓
+Which component?
+        ↓
+Which parent operation?
+        ↓
+How long did it take?
+        ↓
+What failed?
+```
+
+TraceLens turns an opaque AI execution into a structured and inspectable execution history.
+
+---
+
+# 👤 Author
+
+**AJ**
+
+B.Tech — Artificial Intelligence & Data Science
+
+Interested in:
+
+* AI Engineering
+* Backend Systems
+* Full-Stack Development
+* AI Observability
+* Distributed Systems
+
+---
+
+## ⭐ If you find TraceLens interesting, consider giving the repository a star.
+
+```
+```
