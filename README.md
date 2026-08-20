@@ -1,4 +1,4 @@
-# TraceLens 🔍
+# TraceLens 
 
 ### AI Agent Execution Observability Platform
 
@@ -10,7 +10,7 @@ Instead of treating logs as isolated messages, TraceLens reconstructs an agent e
 
 ---
 
-## 🚀 Why TraceLens?
+##  Why TraceLens?
 
 Modern AI applications are rarely a single model call.
 
@@ -45,7 +45,7 @@ TraceLens provides a structured view of this execution journey.
 
 ---
 
-# 🎯 Core Concept
+#  Core Concept
 
 A **trace** represents one complete agent execution.
 
@@ -83,7 +83,7 @@ This allows TraceLens to reconstruct the execution rather than displaying discon
 
 ---
 
-# ✨ Features
+#  Features
 
 ### Trace Lifecycle
 
@@ -204,7 +204,7 @@ The failed event retains its error information for inspection.
 
 ---
 
-# 🏗️ Architecture
+#  Architecture
 
 ```text
                      ┌──────────────────────┐
@@ -247,7 +247,7 @@ The failed event retains its error information for inspection.
 
 ---
 
-# 🧩 System Execution Model
+#  System Execution Model
 
 ```text
                     Agent Request
@@ -353,7 +353,7 @@ The separation allows a trace to contain a variable number of events while prese
 
 ---
 
-# 📊 Trace Explorer
+#  Trace Explorer
 
 The Trace Explorer provides a detailed view of an individual execution.
 
@@ -396,7 +396,7 @@ The operator can inspect:
 
 ---
 
-# 📈 Trace Summary
+#  Trace Summary
 
 TraceLens aggregates execution information into a trace-level summary.
 
@@ -451,7 +451,7 @@ http://127.0.0.1:8000/docs
 
 ---
 
-# 🛡️ Validation & Error Handling
+#  Validation & Error Handling
 
 TraceLens validates execution state at the API layer.
 
@@ -481,7 +481,7 @@ These validations prevent corrupted execution histories.
 
 ---
 
-# 🧠 Engineering Decisions
+#  Engineering Decisions
 
 ## Why PostgreSQL?
 
@@ -537,7 +537,7 @@ The system is designed to observe an existing AI workflow rather than dictate ho
 
 ---
 
-# ⚖️ Engineering Trade-offs
+#  Engineering Trade-offs
 
 A production-grade distributed tracing platform could look like:
 
@@ -585,7 +585,7 @@ The production architecture would be more scalable, but would introduce signific
 
 ---
 
-# ⚠️ Current Limitations
+# Current Limitations
 
 TraceLens is an MVP rather than a production distributed tracing platform.
 
@@ -603,7 +603,7 @@ These limitations are intentional and documented.
 
 ---
 
-# 🔮 Future Roadmap
+#  Future Roadmap
 
 ### Observability
 
@@ -630,7 +630,7 @@ These limitations are intentional and documented.
 
 ---
 
-# 🧪 Demo Scenario
+#  Demo Scenario
 
 A sample AI workflow:
 
@@ -669,7 +669,7 @@ During a demonstration, the following capabilities can be shown:
 
 ---
 
-# 💻 Running Locally
+#  Running Locally
 
 ## Prerequisites
 
@@ -761,7 +761,7 @@ The seed process is designed to avoid unnecessary duplication of existing demo t
 
 ---
 
-# 📁 Project Structure
+#  Project Structure
 
 ```text
 TraceLens/
@@ -793,7 +793,7 @@ TraceLens/
 
 ---
 
-# 🧪 Example API Flow
+#  Example API Flow
 
 ### 1. Create Trace
 
@@ -878,7 +878,7 @@ A reviewer should be able to understand the project visually before reading the 
 
 ---
 
-# 🏆 Why TraceLens?
+#  Why TraceLens?
 
 TraceLens is designed around a simple principle:
 
@@ -907,22 +907,6 @@ What failed?
 ```
 
 TraceLens turns an opaque AI execution into a structured and inspectable execution history.
-
----
-
-# 👤 Author
-
-**AJ**
-
-B.Tech — Artificial Intelligence & Data Science
-
-Interested in:
-
-* AI Engineering
-* Backend Systems
-* Full-Stack Development
-* AI Observability
-* Distributed Systems
 
 ---
 
