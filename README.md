@@ -910,7 +910,3 @@ TraceLens turns an opaque AI execution into a structured and inspectable executi
 
 ---
 
-## ⭐ If you find TraceLens interesting, consider giving the repository a star.
-
-```
-```
