@@ -1,25 +1,48 @@
 """Automated tests for the instrumentation and real agent execution."""
 
+import os
 import pytest
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from datetime import datetime, timezone, timedelta
-from sqlalchemy.orm import Session
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
 
-from app.database import SessionLocal, Base, engine
+from app.database import Base, settings
 from app.models import Trace, TraceEvent
 from app.models.agent import Order, Customer
 from app.instrumentation import Tracer, set_current_trace_id, get_current_trace_id, clear_trace_context
 from app.agent import AIAgent, OrderService
+import google.generativeai as genai
+from app.agent.llm import GeminiProvider
+from app.instrumentation.redaction import redact
+from app.instrumentation.decorators import traced_function
+
+
+TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL", "sqlite:///./test_tracelens.db")
+if TEST_DATABASE_URL == settings.database_url:
+    raise RuntimeError("TEST_DATABASE_URL must not equal DATABASE_URL")
+
+test_engine = create_engine(
+    TEST_DATABASE_URL,
+    connect_args={"check_same_thread": False} if TEST_DATABASE_URL.startswith("sqlite") else {},
+)
+TestSessionLocal = sessionmaker(bind=test_engine, autoflush=False, autocommit=False)
 
 
 # Fixtures
 @pytest.fixture(scope="function")
-def db():
-    """Create a fresh database for each test."""
-    Base.metadata.create_all(bind=engine)
-    db = SessionLocal()
+def db(monkeypatch):
+    """Create a fresh isolated test database; never use the development engine."""
+    clear_trace_context()
+    Base.metadata.create_all(bind=test_engine)
+    monkeypatch.setattr("app.database.SessionLocal", TestSessionLocal)
+    db = TestSessionLocal()
     yield db
     db.close()
-    Base.metadata.drop_all(bind=engine)
+    Base.metadata.drop_all(bind=test_engine)
+    clear_trace_context()
 
 
 @pytest.fixture
@@ -313,6 +336,135 @@ class TestCompleteWorkflow:
         # Verify timing
         total_duration = sum(e.duration_ms for e in events if e.duration_ms)
         assert total_duration > 0
+
+    def test_agent_creates_real_workflow_lineage(self, db, sample_order, monkeypatch):
+        """The observed agent creates the semantic LLM -> KB -> DB -> API -> LLM flow."""
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"order_id": sample_order.order_id, "status": "in_transit"}).encode())
+
+            def log_message(self, *_args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        monkeypatch.setenv("GEMINI_API_KEY", "test-only")
+        monkeypatch.setenv("ORDER_MANAGEMENT_API_URL", f"http://127.0.0.1:{server.server_port}")
+        class FakeResponse:
+            def __init__(self, text):
+                self.text = text
+
+        class FakeModel:
+            def __init__(self, model_name):
+                self.model_name = model_name
+
+            def generate_content(self, prompt, stream=False):
+                if "Analyze this" in prompt:
+                    return FakeResponse("Need policy and order details")
+                if "Determine the order ID" in prompt:
+                    return FakeResponse("Look up ORD-TEST-001")
+                return FakeResponse("Your order is in transit.")
+
+        monkeypatch.setattr(genai, "GenerativeModel", FakeModel)
+
+        try:
+            trace_id = Tracer(db).start_trace("Where is my order ORD-TEST-001 and when will it arrive?")
+            response = AIAgent(db).run("Where is my order ORD-TEST-001 and when will it arrive?")
+            Tracer(db).complete_trace(response)
+        finally:
+            server.shutdown()
+
+        events = db.query(TraceEvent).filter(TraceEvent.trace_id == trace_id).order_by(TraceEvent.sequence_number).all()
+        assert [event.event_type for event in events] == [
+            "llm_call", "knowledge_base_search", "llm_call",
+            "database_query", "external_api_call", "llm_call",
+        ]
+        assert [event.sequence_number for event in events] == [1, 2, 3, 4, 5, 6]
+        assert all(event.duration_ms is not None and event.duration_ms >= 0 for event in events)
+        assert events[1].parent_event_id == events[0].id
+        assert events[2].parent_event_id == events[1].id
+        assert events[3].parent_event_id == events[2].id
+        assert events[4].parent_event_id == events[3].id
+        assert events[5].parent_event_id == events[4].id
+
+    def test_redaction_never_stores_credentials(self, db):
+        tracer = Tracer(db)
+        trace_id = tracer.start_trace("redaction")
+        @traced_function(event_type="tool_call", component="redaction-test")
+        def decorated(payload):
+            return {"authorization": "Bearer token", "safe": "visible"}
+
+        decorated({"api_key": "secret-value", "nested": {"password": "pw"}})
+        event = db.query(TraceEvent).filter(TraceEvent.trace_id == trace_id).one()
+        assert event.input_data == {"args": [{"api_key": "[REDACTED]", "nested": {"password": "[REDACTED]"}}], "kwargs": {}}
+        assert event.output_data == {"result": {"authorization": "[REDACTED]", "safe": "visible"}}
+        assert redact({"access_token": "secret"})["access_token"] == "[REDACTED]"
+
+    def test_mock_llm_preserves_tracing_and_identifies_mode(self, db, monkeypatch):
+        monkeypatch.setenv("MOCK_LLM", "true")
+        trace_id = Tracer(db).start_trace("mock request")
+        provider = GeminiProvider(db)
+        assert provider.generate("test", "llm_1_request_analysis")
+        event = db.query(TraceEvent).filter(TraceEvent.trace_id == trace_id).one()
+        assert event.event_type == "llm_call"
+        assert event.event_metadata["mode"] == "mock"
+        assert event.event_metadata["provider"] == "mock"
+
+    def test_context_isolation_between_concurrent_traces(self, db):
+        from concurrent.futures import ThreadPoolExecutor
+
+        def run_one(label):
+            session = TestSessionLocal()
+            try:
+                tracer = Tracer(session)
+                trace_id = tracer.start_trace(label)
+                tracer.create_event(event_type="tool_call", component=label, start_time=1, end_time=1.01)
+                tracer.complete_trace(label)
+                event = session.query(TraceEvent).filter(TraceEvent.trace_id == trace_id).one()
+                return trace_id, event.trace_id, event.component, event.sequence_number
+            finally:
+                session.close()
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            results = list(executor.map(run_one, ["A", "B", "C"]))
+        assert len({result[0] for result in results}) == 3
+        assert all(trace_id == event_trace_id and sequence == 1 for trace_id, event_trace_id, _, sequence in results)
+        assert {component for _, _, component, _ in results} == {"A", "B", "C"}
+
+    def test_instrumented_failure_updates_event(self, db):
+        Tracer(db).start_trace("failure")
+
+        @traced_function(event_type="database_query", component="failure-test")
+        def failing_query():
+            raise RuntimeError("database unavailable")
+
+        with pytest.raises(RuntimeError, match="database unavailable"):
+            failing_query()
+        event = db.query(TraceEvent).filter(TraceEvent.component == "failure-test").one()
+        assert event.status == "failed"
+        assert event.error_message == "database unavailable"
+
+    def test_agent_route_marks_agent_failure(self, db, monkeypatch):
+        import app.main as main
+        from app.schemas import AgentRequest
+
+        class FailingAgent:
+            def __init__(self, _db):
+                pass
+
+            def run(self, _message):
+                raise RuntimeError("provider unavailable")
+
+        monkeypatch.setattr(main, "AIAgent", FailingAgent)
+        result = main.run_agent(AgentRequest(message="fail this request"), db)
+        assert result["status"] == "failed"
+        assert result["trace_id"]
+        trace = db.query(Trace).filter(Trace.trace_id == result["trace_id"]).one()
+        assert trace.status == "failed"
+        assert trace.output == "provider unavailable"
 
 
 if __name__ == "__main__":

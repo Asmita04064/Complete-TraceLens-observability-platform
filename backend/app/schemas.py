@@ -83,6 +83,11 @@ class TraceEventDetail(BaseModel):
     parent_event_id: Optional[int]
     status: str
     duration_ms: Optional[int]
+    timestamp: Optional[str] = None
+    input_data: Optional[dict] = None
+    output_data: Optional[dict] = None
+    error_message: Optional[str] = None
+    metadata: Optional[dict] = None
 
 
 # ============================================================

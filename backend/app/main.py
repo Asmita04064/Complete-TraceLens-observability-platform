@@ -14,6 +14,7 @@ load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
 from app.database import get_db
 from app.models import Trace, TraceEvent
+from app.models.agent import Order
 from app.schemas import (
     TraceCreate,
     TraceResponse,
@@ -23,7 +24,8 @@ from app.schemas import (
     TraceEventDetail,
     TraceComplete,
     TraceFail,
-     TraceListItem,
+    TraceListItem,
+    AgentRequest,
 )
 from app.agent import AIAgent
 from app.instrumentation import (
@@ -403,6 +405,11 @@ def get_trace(
                 parent_event_id=event.parent_event_id,
                 status=event.status,
                 duration_ms=event.duration_ms,
+                timestamp=event.timestamp.isoformat() if event.timestamp else None,
+                input_data=event.input_data,
+                output_data=event.output_data,
+                error_message=event.error_message,
+                            metadata=event.event_metadata,
             )
             for event in events
         ],
@@ -528,6 +535,20 @@ def get_trace_summary(
         if event.event_type == "database_query"
     )
 
+    knowledge_base_duration = sum(
+        event.duration_ms or 0
+        for event in events
+        if event.event_type == "knowledge_base_search"
+    )
+
+    external_api_duration = sum(
+        event.duration_ms or 0
+        for event in events
+        if event.event_type == "external_api_call"
+    )
+    slowest_event = max(events, key=lambda event: event.duration_ms or 0, default=None)
+    slowest_duration = slowest_event.duration_ms if slowest_event else 0
+
     return {
         "trace_id": trace.trace_id,
         "status": trace.status,
@@ -539,6 +560,15 @@ def get_trace_summary(
         "llm_duration_ms": llm_duration,
         "tool_duration_ms": tool_duration,
         "database_duration_ms": database_duration,
+        "knowledge_base_duration_ms": knowledge_base_duration,
+        "external_api_duration_ms": external_api_duration,
+        "slowest_event": {
+            "event_id": slowest_event.event_id,
+            "event_type": slowest_event.event_type,
+            "component": slowest_event.component,
+            "duration_ms": slowest_duration,
+            "percentage_of_trace": round((slowest_duration / trace.duration_ms) * 100, 1) if trace.duration_ms else 0,
+        } if slowest_event else None,
         "events": [
             {
                 "event_id": event.event_id,
@@ -558,9 +588,23 @@ def get_trace_summary(
 # AGENT RUN (Real AI Agent Execution with Tracing)
 # ============================================================
 
+@app.get("/mock/order-management/orders/{order_id}")
+def mock_order_management(order_id: str, db: Session = Depends(get_db)):
+    """Local HTTP service endpoint used by the agent's external API client."""
+    order = db.query(Order).filter(Order.order_id == order_id).first()
+    if order is None:
+        raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
+    return {
+        "order_id": order.order_id,
+        "status": order.status,
+        "estimated_delivery": order.estimated_delivery.isoformat() if order.estimated_delivery else None,
+        "tracking_number": order.tracking_number,
+        "carrier": "TraceShip",
+    }
+
 @app.post("/agent/run", response_model=dict)
 def run_agent(
-    request: dict,
+    request: AgentRequest,
     db: Session = Depends(get_db),
 ):
     """
@@ -585,11 +629,8 @@ def run_agent(
             "response": "agent's final response"
         }
     """
-    from app.schemas import AgentRequest
-
     try:
-        # Parse request
-        message = request.get("message", "").strip()
+        message = request.message.strip()
         if not message:
             raise ValueError("Message is required")
 
@@ -611,6 +652,7 @@ def run_agent(
                 "trace_id": trace_id,
                 "status": "completed",
                 "response": response,
+                "llm_mode": "mock" if __import__("os").getenv("MOCK_LLM", "false").lower() == "true" else "real",
             }
 
         except Exception as e:
@@ -622,6 +664,7 @@ def run_agent(
                 "trace_id": trace_id,
                 "status": "failed",
                 "response": error_msg,
+                "llm_mode": "mock" if __import__("os").getenv("MOCK_LLM", "false").lower() == "true" else "real",
             }
 
     except Exception as e:

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models import Trace, TraceEvent
@@ -15,6 +16,7 @@ from app.instrumentation.context import (
     set_current_event_id,
     clear_trace_context,
 )
+from app.instrumentation.redaction import redact
 
 
 class Tracer:
@@ -23,7 +25,6 @@ class Tracer:
     def __init__(self, db: Session):
         """Initialize tracer with database session."""
         self.db = db
-        self._sequence_counter = 0
 
     def start_trace(self, input_text: str) -> str:
         """
@@ -44,9 +45,8 @@ class Tracer:
         self.db.add(trace)
         self.db.commit()
 
-        # Set trace ID in context
+        clear_trace_context()
         set_current_trace_id(trace_id)
-        self._sequence_counter = 0
 
         return trace_id
 
@@ -88,9 +88,12 @@ class Tracer:
         if not trace or trace.status != "running":
             raise RuntimeError("Trace is not in running state")
 
-        # Increment sequence number
-        self._sequence_counter += 1
-        sequence_number = self._sequence_counter
+        sequence_number = (
+            self.db.query(func.max(TraceEvent.sequence_number))
+            .filter(TraceEvent.trace_id == trace_id)
+            .scalar()
+            or 0
+        ) + 1
 
         # Get parent event ID from context
         parent_event_id = get_current_event_id()
@@ -109,11 +112,11 @@ class Tracer:
             component=component,
             timestamp=self._utc_now(),
             duration_ms=max(0, duration_ms),  # Ensure non-negative
-            input_data=input_data,
-            output_data=output_data,
+            input_data=redact(input_data),
+            output_data=redact(output_data),
             status=status,
-            error_message=error_message,
-            metadata=metadata,
+            error_message=redact(error_message),
+            event_metadata=metadata,
         )
 
         self.db.add(event)
@@ -121,6 +124,26 @@ class Tracer:
         self.db.refresh(event)
 
         return event.id
+
+    def update_event(
+        self,
+        event_id: int,
+        *,
+        start_time: float,
+        end_time: float,
+        status: str,
+        output_data: Optional[dict] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """Finish an event that was created before its operation ran."""
+        event = self.db.query(TraceEvent).filter(TraceEvent.id == event_id).first()
+        if event is None:
+            raise RuntimeError("Trace event not found")
+        event.duration_ms = max(0, int((end_time - start_time) * 1000))
+        event.status = status
+        event.output_data = redact(output_data)
+        event.error_message = redact(error_message)
+        self.db.commit()
 
     def complete_trace(self, output_text: str) -> None:
         """
