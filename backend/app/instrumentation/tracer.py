@@ -97,6 +97,17 @@ class Tracer:
 
         # Get parent event ID from context
         parent_event_id = get_current_event_id()
+        if parent_event_id is not None:
+            parent_event = (
+                self.db.query(TraceEvent)
+                .filter(
+                    TraceEvent.id == parent_event_id,
+                    TraceEvent.trace_id == trace_id,
+                )
+                .first()
+            )
+            if parent_event is None:
+                raise RuntimeError("Parent event does not belong to the active trace")
 
         # Calculate duration
         duration_ms = int((end_time - start_time) * 1000)

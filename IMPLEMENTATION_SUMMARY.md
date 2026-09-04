@@ -17,6 +17,6 @@ TraceLens now observes an explicit customer-support workload rather than present
 
 ## Verification
 
-- Backend: 14 tests passing.
+- Backend: 26 tests passing.
 - Frontend: Vite production build passing.
 - Live Gemini execution remains dependent on the configured provider project having model access and quota.

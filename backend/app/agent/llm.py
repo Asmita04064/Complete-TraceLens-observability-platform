@@ -26,6 +26,7 @@ class GeminiProvider:
         output = None
         try:
             if self.mock_mode:
+                time.sleep(0.001)
                 output = {
                     "llm_1_request_analysis": "The request needs shipping policy and order details.",
                     "llm_2_action_planning": "Look up the order and confirm delivery status.",

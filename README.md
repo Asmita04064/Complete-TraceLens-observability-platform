@@ -147,6 +147,21 @@ Missing orders fail during the real PostgreSQL operation and create a failed `da
 - Error and failure tracing
 - Automated semantic workflow, redaction, and concurrency tests
 
+## Engineering Decisions
+
+- **`contextvars`:** keeps the active trace local to each request and thread without global mutable state.
+- **Decorators:** make database and retrieval instrumentation reusable at the operation boundary.
+- **Structured events:** preserve searchable payloads, status, duration, and lineage fields in PostgreSQL.
+- **Parent IDs and sequence numbers:** represent both the runtime tree and the observed execution order.
+- **Monotonic timing:** `time.perf_counter()` measures elapsed operation time without wall-clock jumps.
+- **Provider abstraction:** `GeminiProvider` makes the real SDK boundary explicit and leaves room for another provider.
+- **Mock mode:** `MOCK_LLM=true` provides a deterministic demo without mislabeling responses as Gemini output.
+- **Local HTTP boundary:** the order-management route demonstrates external-call instrumentation without adding deployment complexity.
+
+## Trade-offs
+
+This is an internship-scale MVP: the service boundary is local rather than distributed, execution is synchronous, the knowledge base is a local document list rather than a vector database, and Gemini is the only real provider. It has limited credential redaction, no distributed trace propagation, and no OpenTelemetry export; these are deliberate future improvements rather than hidden capabilities.
+
 ## Privacy
 
 The tracer captures operational payloads for inspection but should not be given secrets. The repository ignores `.env`, and event payloads must never include API keys, database passwords, authorization headers, or other credentials. Production deployments should add field-level redaction and retention controls before capturing real customer data.
@@ -173,7 +188,10 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/agent/run `
 
 A live successful run requires a Gemini project with an enabled model and available quota. Provider access or quota failures are recorded as failed LLM events rather than hidden or replaced with mock output.
 
-The current test fixture resets the configured PostgreSQL schema between tests. Use a dedicated test database before running the suite; do not point it at a shared or production database.
+The test fixture resets only the dedicated `TEST_DATABASE_URL` database. Use a dedicated test database before running the suite; never point it at a shared or production database.
+
+For an isolated local test run, set `TEST_DATABASE_URL=sqlite:///./test_tracelens.db` in the shell before invoking pytest. For PostgreSQL-backed tests, create a separate database and set `TEST_DATABASE_URL` to that database URL. The test module fails fast if it equals `DATABASE_URL`.
+
 
 ## Limitations and Future Work
 

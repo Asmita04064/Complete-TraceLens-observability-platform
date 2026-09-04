@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 
 
@@ -124,10 +124,11 @@ class TraceListItem(BaseModel):
 # ============================================================
 
 class AgentRequest(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=4000)
 
 
 class AgentResponse(BaseModel):
     trace_id: str
     status: str
     response: str
+    llm_mode: Optional[str] = None

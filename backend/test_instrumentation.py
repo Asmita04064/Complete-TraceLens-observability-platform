@@ -12,12 +12,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.database import Base, settings
 from app.models import Trace, TraceEvent
 from app.models.agent import Order, Customer
-from app.instrumentation import Tracer, set_current_trace_id, get_current_trace_id, clear_trace_context
+from app.instrumentation import Tracer, set_current_trace_id, set_current_event_id, get_current_trace_id, clear_trace_context
 from app.agent import AIAgent, OrderService
 import google.generativeai as genai
 from app.agent.llm import GeminiProvider
 from app.instrumentation.redaction import redact
 from app.instrumentation.decorators import traced_function
+from app.schemas import AgentRequest
+from pydantic import ValidationError
 
 
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL", "sqlite:///./test_tracelens.db")
@@ -230,6 +232,29 @@ class TestTracer:
         assert event.status == "failed"
         assert event.error_message == "Database connection error"
 
+    def test_parent_event_must_belong_to_active_trace(self, db):
+        first = Tracer(db)
+        first_trace = first.start_trace("first")
+        parent_id = first.create_event("tool_call", "first", 1, 2)
+        second = Tracer(db)
+        second_trace = second.start_trace("second")
+        set_current_trace_id(second_trace)
+        set_current_event_id(parent_id)
+        with pytest.raises(RuntimeError, match="does not belong"):
+            second.create_event("tool_call", "second", 1, 2)
+        set_current_trace_id(first_trace)
+        first.complete_trace("done")
+        clear_trace_context()
+        assert db.query(TraceEvent).filter(TraceEvent.id == parent_id).one()
+
+    def test_completed_trace_rejects_new_events(self, db):
+        tracer = Tracer(db)
+        trace_id = tracer.start_trace("completed")
+        tracer.complete_trace("done")
+        set_current_trace_id(trace_id)
+        with pytest.raises(RuntimeError, match="not in running state"):
+            tracer.create_event("tool_call", "late", 1, 2)
+
 
 # Tests for OrderService
 class TestOrderService:
@@ -385,9 +410,9 @@ class TestCompleteWorkflow:
         assert [event.sequence_number for event in events] == [1, 2, 3, 4, 5, 6]
         assert all(event.duration_ms is not None and event.duration_ms >= 0 for event in events)
         assert events[1].parent_event_id == events[0].id
-        assert events[2].parent_event_id == events[1].id
+        assert events[2].parent_event_id == events[0].id
         assert events[3].parent_event_id == events[2].id
-        assert events[4].parent_event_id == events[3].id
+        assert events[4].parent_event_id == events[2].id
         assert events[5].parent_event_id == events[4].id
 
     def test_redaction_never_stores_credentials(self, db):
@@ -465,6 +490,80 @@ class TestCompleteWorkflow:
         trace = db.query(Trace).filter(Trace.trace_id == result["trace_id"]).one()
         assert trace.status == "failed"
         assert trace.output == "provider unavailable"
+
+    def test_agent_request_rejects_empty_input(self):
+        with pytest.raises(ValidationError):
+            AgentRequest(message="")
+
+    def test_missing_order_fails_through_agent_route(self, db, monkeypatch):
+        import app.main as main
+
+        monkeypatch.setenv("MOCK_LLM", "true")
+        result = main.run_agent(AgentRequest(message="Where is order ORD-9999?"), db)
+        assert result["status"] == "failed"
+        trace = db.query(Trace).filter(Trace.trace_id == result["trace_id"]).one()
+        event = db.query(TraceEvent).filter(TraceEvent.trace_id == trace.trace_id).order_by(TraceEvent.sequence_number).all()
+        assert trace.status == "failed"
+        assert event[-1].event_type == "database_query"
+        assert event[-1].status == "failed"
+        assert "ORD-9999" in event[-1].error_message
+
+    def test_order_api_failure_fails_through_agent_route(self, db, sample_order, monkeypatch):
+        import app.main as main
+
+        monkeypatch.setenv("MOCK_LLM", "true")
+        monkeypatch.setenv("ORDER_MANAGEMENT_API_URL", "http://127.0.0.1:9")
+        order_id = sample_order.order_id
+        result = main.run_agent(AgentRequest(message=f"Where is order {sample_order.order_id}?"), db)
+        trace = db.query(Trace).filter(Trace.trace_id == result["trace_id"]).one()
+        events = db.query(TraceEvent).filter(TraceEvent.trace_id == trace.trace_id).order_by(TraceEvent.sequence_number).all()
+        assert result["status"] == "failed"
+        assert trace.status == "failed"
+        assert events[-1].event_type == "external_api_call"
+        assert events[-1].status == "failed"
+        assert events[-1].error_message
+
+    def test_gemini_failure_fails_without_mock_fallback(self, db, monkeypatch):
+        import app.main as main
+
+        class FailingModel:
+            def __init__(self, _model_name):
+                raise RuntimeError("Gemini quota exhausted")
+
+        monkeypatch.setenv("MOCK_LLM", "false")
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        monkeypatch.setattr(genai, "GenerativeModel", FailingModel)
+        result = main.run_agent(AgentRequest(message="Where is order ORD-1001?"), db)
+        trace = db.query(Trace).filter(Trace.trace_id == result["trace_id"]).one()
+        event = db.query(TraceEvent).filter(TraceEvent.trace_id == trace.trace_id).one()
+        assert result["status"] == "failed"
+        assert trace.status == "failed"
+        assert event.status == "failed"
+        assert "Gemini quota exhausted" in event.error_message
+
+    def test_concurrent_agent_routes_keep_traces_isolated(self, db, sample_order, monkeypatch):
+        import app.main as main
+
+        monkeypatch.setenv("MOCK_LLM", "true")
+        monkeypatch.setenv("ORDER_MANAGEMENT_API_URL", "http://127.0.0.1:9")
+        order_id = sample_order.order_id
+
+        def run_one(label):
+            session = TestSessionLocal()
+            try:
+                result = main.run_agent(AgentRequest(message=f"{label} order {order_id}"), session)
+                trace = session.query(Trace).filter(Trace.trace_id == result["trace_id"]).one()
+                events = session.query(TraceEvent).filter(TraceEvent.trace_id == trace.trace_id).all()
+                return trace.trace_id, {event.trace_id for event in events}, [event.sequence_number for event in events]
+            finally:
+                session.close()
+
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            results = list(executor.map(run_one, ["A", "B", "C"]))
+        assert len({trace_id for trace_id, _, _ in results}) == 3
+        assert all(trace_ids == {trace_id} for trace_id, trace_ids, _ in results)
+        assert all(sequences == list(range(1, 6)) for _, _, sequences in results)
 
 
 if __name__ == "__main__":

@@ -54,8 +54,9 @@ cd ..\frontend
 npm run build
 ```
 
-The current backend suite includes semantic lineage, redaction, mock-mode, and concurrency tests and should report 17 passing tests. A live Gemini run additionally requires an enabled model and available quota for the configured API project. Set `MOCK_LLM=true` for a deterministic demo; the UI labels it `MOCK LLM` and preserves the same traced workflow.
+The current backend suite includes semantic lineage, redaction, mock-mode, failure, integrity, and concurrency tests and should report 26 passing tests. A live Gemini run additionally requires an enabled model and available quota for the configured API project. Set `MOCK_LLM=true` for a deterministic demo; the UI labels it `MOCK LLM` and preserves the same traced workflow.
 
+Tests default to the isolated SQLite database `sqlite:///./test_tracelens.db`. To use PostgreSQL, set `TEST_DATABASE_URL` to a dedicated test database before running pytest. The suite refuses to run if that URL equals `DATABASE_URL`.
 ## API smoke test
 
 ```powershell

@@ -72,7 +72,7 @@ def traced_function(event_type: str, component: str, capture_input: bool = True,
                     )
                 finally:
                     db.close()
-                set_current_event_id(event_id if event_id is not None else parent_event_id)
+                set_current_event_id(parent_event_id)
 
         return wrapper
     return decorator

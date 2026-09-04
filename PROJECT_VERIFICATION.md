@@ -2,7 +2,7 @@
 
 ## Verified locally
 
-- `backend/.venv/Scripts/python.exe -m pytest -q`: 14 passed.
+- `backend/.venv/Scripts/python.exe -m pytest -q`: 26 passed.
 - `frontend/npm run build`: passed.
 - Trace sequence and parent IDs are asserted by the end-to-end test.
 - The end-to-end test executes a real local HTTP request and captures the external API event.
@@ -14,7 +14,7 @@ A live Gemini request is not claimed as successful by this report. It requires a
 
 ## Remaining technical risk
 
-The existing test fixture resets the configured PostgreSQL schema between tests. The suite is verified locally, but it must use a dedicated test database rather than a shared runtime database.
+The test fixture resets only the dedicated `TEST_DATABASE_URL` database. The suite is verified locally and must never use a shared runtime database.
 
 ## Manual demo
 

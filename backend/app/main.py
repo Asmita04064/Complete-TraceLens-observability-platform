@@ -7,7 +7,8 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+import os
+
 
 # Load environment variables from .env file
 load_dotenv(Path(__file__).parent.parent.parent / ".env")
@@ -26,6 +27,7 @@ from app.schemas import (
     TraceFail,
     TraceListItem,
     AgentRequest,
+    AgentResponse,
 )
 from app.agent import AIAgent
 from app.instrumentation import (
@@ -602,7 +604,7 @@ def mock_order_management(order_id: str, db: Session = Depends(get_db)):
         "carrier": "TraceShip",
     }
 
-@app.post("/agent/run", response_model=dict)
+@app.post("/agent/run", response_model=AgentResponse)
 def run_agent(
     request: AgentRequest,
     db: Session = Depends(get_db),
@@ -632,7 +634,7 @@ def run_agent(
     try:
         message = request.message.strip()
         if not message:
-            raise ValueError("Message is required")
+            raise HTTPException(status_code=422, detail="Message is required")
 
         # Create tracer
         tracer = Tracer(db)
@@ -652,7 +654,7 @@ def run_agent(
                 "trace_id": trace_id,
                 "status": "completed",
                 "response": response,
-                "llm_mode": "mock" if __import__("os").getenv("MOCK_LLM", "false").lower() == "true" else "real",
+                "llm_mode": "mock" if os.getenv("MOCK_LLM", "false").lower() == "true" else "real",
             }
 
         except Exception as e:
@@ -664,9 +666,11 @@ def run_agent(
                 "trace_id": trace_id,
                 "status": "failed",
                 "response": error_msg,
-                "llm_mode": "mock" if __import__("os").getenv("MOCK_LLM", "false").lower() == "true" else "real",
+                "llm_mode": "mock" if os.getenv("MOCK_LLM", "false").lower() == "true" else "real",
             }
 
+    except HTTPException:
+        raise
     except Exception as e:
         # Return error response without trace
         return {
