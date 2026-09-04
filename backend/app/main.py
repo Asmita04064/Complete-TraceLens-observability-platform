@@ -210,7 +210,7 @@ def create_trace_event(
         output_data=event_data.output_data,
         status=event_data.status,
         error_message=event_data.error_message,
-        metadata=event_data.metadata,
+        event_metadata=event_data.metadata,
     )
 
     db.add(event)

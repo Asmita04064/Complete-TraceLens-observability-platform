@@ -30,13 +30,14 @@ class AIAgent:
         self.tracer = Tracer(db)
         self.order_service = OrderService(db)
 
-        # Get API key from environment
+        # Get API key and model from environment
         self.api_key = os.getenv("GEMINI_API_KEY")
         if not self.api_key:
             raise RuntimeError(
                 "GEMINI_API_KEY environment variable not set. "
                 "Please set your Google Gemini API key."
             )
+        self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
     def run(self, user_message: str) -> str:
         """
@@ -128,7 +129,7 @@ class AIAgent:
 
             # Create model with tool use
             model = genai.GenerativeModel(
-                model_name="gemini-2.0-flash",
+                model_name=self.model_name,
                 tools=tool_config,
             )
 
@@ -286,7 +287,7 @@ class AIAgent:
 
                 event_db_id = tracer.create_event(
                     event_type="llm_call",
-                    component="gemini-2.0-flash",
+                    component=self.model_name,
                     start_time=start_time,
                     end_time=end_time,
                     input_data=input_data,
@@ -305,7 +306,7 @@ class AIAgent:
 
     def _execute_tool(self, function_call: Any) -> dict[str, Any]:
         """
-        Execute a tool call from Gemini.
+        Execute a tool call from Gemini and record a real tool event.
 
         Args:
             function_call: The function call object from Gemini
@@ -314,12 +315,33 @@ class AIAgent:
             Tool execution result
         """
         tool_name = function_call.name
-        args = dict(function_call.args)
-
-        # Save parent event context
+        args = dict(getattr(function_call, "args", {}) or {})
         parent_event_id = get_current_event_id()
+        start_time = time.perf_counter()
+        tool_event_id = None
+        status = "success"
+        error_message = None
+        output_data = None
 
         try:
+            from app.database import SessionLocal
+
+            db = SessionLocal()
+            try:
+                tracer = Tracer(db)
+                tool_event_id = tracer.create_event(
+                    event_type="tool_call",
+                    component=tool_name,
+                    start_time=start_time,
+                    end_time=start_time,
+                    input_data={"tool": tool_name, "arguments": args},
+                    output_data={"status": "running"},
+                    status="running",
+                )
+                set_current_event_id(tool_event_id)
+            finally:
+                db.close()
+
             if tool_name == "get_order_status":
                 result = self.order_service.get_order_status(args["order_id"])
             elif tool_name == "get_customer_details":
@@ -329,14 +351,52 @@ class AIAgent:
             else:
                 raise ValueError(f"Unknown tool: {tool_name}")
 
+            output_data = {"success": True, "data": result}
             return {"success": True, "data": result}
 
         except Exception as e:
+            status = "failed"
+            error_message = str(e)
+            output_data = {"success": False, "error": error_message}
             return {
                 "success": False,
-                "error": str(e),
+                "error": error_message,
             }
         finally:
-            # Restore parent event context for next LLM call
+            end_time = time.perf_counter()
+            try:
+                from app.database import SessionLocal
+
+                db = SessionLocal()
+                try:
+                    event = (
+                        db.query(type("T", (), {"__getattr__": lambda self, name: None})())
+                    )
+                finally:
+                    db.close()
+            except Exception:
+                pass
+
+            if tool_event_id is not None:
+                try:
+                    from app.database import SessionLocal
+
+                    db = SessionLocal()
+                    try:
+                        from app.models import TraceEvent
+
+                        event = db.query(TraceEvent).filter(TraceEvent.id == tool_event_id).first()
+                        if event is not None:
+                            event.duration_ms = max(0, int((end_time - start_time) * 1000))
+                            event.status = status
+                            event.error_message = error_message
+                            event.output_data = output_data
+                            event.timestamp = datetime.now(timezone.utc)
+                            db.commit()
+                    finally:
+                        db.close()
+                except Exception:
+                    pass
+
             if parent_event_id:
                 set_current_event_id(parent_event_id)

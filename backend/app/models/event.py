@@ -83,8 +83,8 @@ class TraceEvent(Base):
     )
 
     event_metadata: Mapped[dict | None] = mapped_column(
-    "metadata",
-    JSON,
-    nullable=True,
+        "metadata",
+        JSON,
+        nullable=True,
     )
     

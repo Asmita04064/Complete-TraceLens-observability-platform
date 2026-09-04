@@ -1,6 +1,6 @@
 # TraceLens
 
-**TraceLens is an AI Agent Execution Observability Platform** that automatically instruments and visualizes real AI agent executions. Instead of working with mock data, TraceLens captures actual LLM calls, tool executions, and database operations as they happen.
+**TraceLens is an AI Agent Execution Observability Platform** that automatically instruments and visualizes real AI agent executions. The system records actual LLM calls, tool executions, and database operations as they happen during live agent runs.
 
 ## Core Capability
 
@@ -16,7 +16,7 @@ User Request → Real AI Agent → LLM Call → Tool Call → Database Query
 
 ### What Makes This Different
 
-✅ **Real agent execution** - Not mock data or seeded traces  
+✅ **Real agent execution** - Not synthetic demo traces
 ✅ **Automatic instrumentation** - Events created at runtime, not manually  
 ✅ **Actual timing** - Real measured durations using time.perf_counter()  
 ✅ **Real hierarchy** - Parent-child relationships from actual execution flow  
@@ -59,7 +59,7 @@ Trace ID: tr_abc123xyz
 Status: COMPLETED
 Total Duration: 1527 ms
 
-LLM Call - Gemini 2.0 Flash
+LLM Call - Gemini 2.5 Flash
 ├─ Duration: 842 ms
 ├─ Status: SUCCESS
 ├─ Input: "Where is order ORD-1001?"
@@ -75,7 +75,7 @@ LLM Call - Gemini 2.0 Flash
         ├─ Status: SUCCESS
         └─ Query: SELECT * FROM orders WHERE order_id = ?
 
-  └─ LLM Call - Gemini 2.0 Flash
+   └─ LLM Call - Gemini 2.5 Flash
      ├─ Duration: 603 ms
      ├─ Status: SUCCESS
      └─ Output: "Your order ORD-1001 is currently in transit..."
@@ -209,7 +209,7 @@ TraceLens uses three key techniques for automatic event capture:
 - **Frontend**: React 18+, Vite, CSS, native Fetch API
 - **Backend**: Python 3.9+, FastAPI, SQLAlchemy 2.0+, Pydantic
 - **Database**: PostgreSQL 12+
-- **LLM**: Google Gemini 2.0 Flash API
+- **LLM**: Google Gemini API (configured by GEMINI_MODEL, default gemini-2.5-flash)
 - **Instrumentation**: Python contextvars, decorators, time.perf_counter()
 - **Testing**: pytest
 
@@ -584,7 +584,7 @@ def traced_function(event_type: str, component: str):
 ## Limitations
 
 - **Single agent at a time** - One agent execution per request (no multi-agent coordination)
-- **Gemini only** - Currently hardcoded to Gemini 2.0 Flash (extensible to other models)
+- **Gemini only** - Model is configured through GEMINI_MODEL and can be swapped for other supported Gemini models
 - **Local execution** - No distributed tracing (traces exist in single database)
 - **No filtering on context** - All events in trace are captured (no selective instrumentation)
 - **Manual tool definition** - Tools must be explicitly decorated (not auto-discovered)
@@ -647,7 +647,7 @@ Contributions are welcome! Areas for improvement:
 ## Demo Flow
 
 1. Start PostgreSQL, the backend, and the frontend.
-2. Run `python seed_demo.py` from `backend`.
+2. Run the real agent workflow through the API or frontend instead of using synthetic demo seeding.
 3. Open the dashboard and point out total, completed, failed, and average-duration metrics.
 4. Search for `order` and open the order lookup trace.
 5. Walk down the timeline from Gemini to Order Service to PostgreSQL.
