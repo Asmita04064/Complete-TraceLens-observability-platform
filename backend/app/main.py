@@ -1,10 +1,16 @@
 from datetime import datetime, timezone
 from uuid import uuid4
+from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
+
+# Load environment variables from .env file
+load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
 from app.database import get_db
 from app.models import Trace, TraceEvent
@@ -18,6 +24,11 @@ from app.schemas import (
     TraceComplete,
     TraceFail,
      TraceListItem,
+)
+from app.agent import AIAgent
+from app.instrumentation import (
+    Tracer,
+    clear_trace_context,
 )
 
 
@@ -407,11 +418,12 @@ def get_trace(
 def list_traces(
     db: Session = Depends(get_db),
 ):
-    event_counts = dict(
-        db.query(TraceEvent.trace_id, func.count(TraceEvent.id))
+    event_counts = {
+        trace_id: count
+        for trace_id, count in db.query(TraceEvent.trace_id, func.count(TraceEvent.id))
         .group_by(TraceEvent.trace_id)
         .all()
-    )
+    }
 
     traces = (
         db.query(Trace)
@@ -540,3 +552,85 @@ def get_trace_summary(
             for event in events
         ],
     }
+
+
+# ============================================================
+# AGENT RUN (Real AI Agent Execution with Tracing)
+# ============================================================
+
+@app.post("/agent/run", response_model=dict)
+def run_agent(
+    request: dict,
+    db: Session = Depends(get_db),
+):
+    """
+    Execute the real AI agent with automatic trace instrumentation.
+
+    The agent will:
+    1. Start a trace
+    2. Process the user message with Gemini LLM
+    3. Call tools (database queries) as needed
+    4. Complete the trace
+    5. Return the response and trace ID
+
+    All events (LLM calls, tool calls, database queries) are automatically captured.
+
+    Args:
+        request: { "message": "user message" }
+
+    Returns:
+        {
+            "trace_id": "tr_xxxxx",
+            "status": "completed" or "failed",
+            "response": "agent's final response"
+        }
+    """
+    from app.schemas import AgentRequest
+
+    try:
+        # Parse request
+        message = request.get("message", "").strip()
+        if not message:
+            raise ValueError("Message is required")
+
+        # Create tracer
+        tracer = Tracer(db)
+
+        # Start trace with user message
+        trace_id = tracer.start_trace(message)
+
+        try:
+            # Create and run agent
+            agent = AIAgent(db)
+            response = agent.run(message)
+
+            # Complete trace
+            tracer.complete_trace(response)
+
+            return {
+                "trace_id": trace_id,
+                "status": "completed",
+                "response": response,
+            }
+
+        except Exception as e:
+            # Fail trace on error
+            error_msg = str(e)
+            tracer.fail_trace(error_msg)
+
+            return {
+                "trace_id": trace_id,
+                "status": "failed",
+                "response": error_msg,
+            }
+
+    except Exception as e:
+        # Return error response without trace
+        return {
+            "trace_id": None,
+            "status": "failed",
+            "response": f"Error: {str(e)}",
+        }
+    finally:
+        # Ensure context is cleared
+        clear_trace_context()

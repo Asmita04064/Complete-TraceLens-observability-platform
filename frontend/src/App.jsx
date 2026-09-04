@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getHealth, getTrace, getTraceSummary, getTraces } from './api/traces.js'
+import { getHealth, getTrace, getTraceSummary, getTraces, runAgent } from './api/traces.js'
 
 const typeLabels = { llm_call: 'LLM call', tool_call: 'Tool call', database_query: 'Database query' }
 const typeIcons = { llm_call: '✦', tool_call: '↗', database_query: '⌁' }
@@ -41,6 +41,9 @@ function App() {
   const [error, setError] = useState('')
   const [apiOnline, setApiOnline] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [agentInput, setAgentInput] = useState('')
+  const [agentRunning, setAgentRunning] = useState(false)
+  const [agentResult, setAgentResult] = useState(null)
 
   async function loadTraces() {
     if (refreshing) return
@@ -143,13 +146,50 @@ function App() {
     setError('')
   }
 
+  async function handleRunAgent() {
+    if (!agentInput.trim()) {
+      setError('Please enter a message for the agent')
+      return
+    }
+
+    setAgentRunning(true)
+    setError('')
+    setAgentResult(null)
+
+    try {
+      const result = await runAgent(agentInput)
+      if (!result || typeof result !== 'object') {
+        throw new Error('Invalid response from agent')
+      }
+
+      setAgentResult(result)
+
+      // If trace was created, load traces to show the new one
+      if (result.trace_id) {
+        await loadTraces()
+      }
+    } catch (err) {
+      console.error('Agent execution failed:', err)
+      setError(`Agent error: ${err.message}`)
+      setAgentResult({ status: 'failed', response: err.message })
+    } finally {
+      setAgentRunning(false)
+    }
+  }
+
+  function handleOpenGeneratedTrace() {
+    if (agentResult?.trace_id) {
+      openTrace(agentResult.trace_id)
+    }
+  }
+
   const selectedListTrace = traces.find((trace) => trace.trace_id === selectedTraceId)
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark">T</span><span>TraceLens</span></div>
-        <nav><button className={`nav-item ${currentView === 'dashboard' ? 'active' : ''}`} onClick={() => setCurrentView('dashboard')}><span>◈</span> Dashboard</button><button className={`nav-item ${currentView !== 'dashboard' ? 'active' : ''}`} onClick={showTraces}><span>⌘</span> Traces</button></nav>
+        <nav><button className={`nav-item ${currentView === 'dashboard' ? 'active' : ''}`} onClick={() => setCurrentView('dashboard')}><span>◈</span> Dashboard</button><button className={`nav-item ${currentView === 'agent' ? 'active' : ''}`} onClick={() => setCurrentView('agent')}><span>▶</span> Run Agent</button><button className={`nav-item ${currentView !== 'dashboard' && currentView !== 'agent' ? 'active' : ''}`} onClick={showTraces}><span>⌘</span> Traces</button></nav>
         <div className="sidebar-foot"><div className={`connection-label ${apiOnline === false ? 'offline' : ''}`}><span className="pulse" /> API {apiOnline === false ? 'offline' : apiOnline === true ? 'connected' : 'checking'}</div><small>FastAPI · PostgreSQL</small><div className="sidebar-version"><strong>TraceLens</strong><span>Agent observability</span><span>v0.1.0</span></div></div>
       </aside>
       <main className="main-content">
@@ -171,6 +211,7 @@ function App() {
           <TraceDetail detail={detail} summary={summary} loading={detailLoading} summaryLoading={summaryLoading} />
         </section>}
         {currentView === 'traces' && <section className="panel trace-panel dedicated-traces"><div className="panel-heading"><div><p className="eyebrow">TRACE EXPLORER</p><h2>All executions</h2></div><span className="count">{filteredTraces.length} visible</span></div><div className="filters"><div className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search traces or prompts" />{query && <button className="clear-search" title="Clear search" onClick={() => setQuery('')}>×</button>}</div><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">All statuses</option><option value="running">Running</option><option value="completed">Completed</option><option value="failed">Failed</option></select></div>{loading ? <TraceListSkeleton /> : filteredTraces.length === 0 ? <EmptyTraceState filtered={Boolean(query || statusFilter !== 'all')} /> : <div className="trace-list">{filteredTraces.map((trace) => <button className="trace-row" key={trace.trace_id || trace.input} onClick={() => trace.trace_id && openTrace(trace.trace_id)}><span className="trace-main"><strong>{trace.input || 'Untitled execution'}</strong><small>{trace.trace_id || '—'}</small></span><Status value={trace.status} /><span className="row-meta">{trace.event_count == null ? '—' : trace.event_count} events</span><span className="row-meta">{formatDuration(trace.duration_ms)}</span><span className="row-date">{formatDate(trace.started_at)}</span><span className="arrow">→</span></button>)}</div>}</section>}
+        {currentView === 'agent' && <section className="panel agent-panel"><div className="panel-heading"><div><p className="eyebrow">AI AGENT</p><h2>Execute a real agent request</h2></div></div><div className="agent-interface"><div className="agent-input-section"><label>Message:</label><textarea value={agentInput} onChange={(e) => setAgentInput(e.target.value)} placeholder="Ask the agent something, e.g., 'Where is order ORD-1001?'" disabled={agentRunning} rows="4" /></div><button className="agent-run-button" onClick={handleRunAgent} disabled={agentRunning || !agentInput.trim()}>{agentRunning ? <span>⟳ Running...</span> : <span>▶ Run Agent</span>}</button>{agentResult && <div className={`agent-result result-${agentResult.status}`}><div className="result-header"><strong>{agentResult.status === 'completed' ? '✓ Completed' : '✗ Failed'}</strong>{agentResult.trace_id && <small>Trace: {agentResult.trace_id}</small>}</div><div className="result-content"><p className="result-response">{agentResult.response}</p>{agentResult.trace_id && <button className="view-trace-button" onClick={handleOpenGeneratedTrace}>View Trace →</button>}</div></div>}</div></section>}
         {currentView === 'trace-detail' && <div className="detail-page"><button className="back-button" onClick={showTraces}>← Back to traces</button><TraceDetail detail={detail} summary={summary} listTrace={selectedListTrace} loading={detailLoading} summaryLoading={summaryLoading} /></div>}
       </main>
     </div>

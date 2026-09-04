@@ -112,3 +112,17 @@ class TraceListItem(BaseModel):
     completed_at: Optional[str]
     duration_ms: Optional[int]
     event_count: int
+
+
+# ============================================================
+# AGENT REQUEST/RESPONSE
+# ============================================================
+
+class AgentRequest(BaseModel):
+    message: str
+
+
+class AgentResponse(BaseModel):
+    trace_id: str
+    status: str
+    response: str

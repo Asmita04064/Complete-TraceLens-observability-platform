@@ -20,3 +20,5 @@ export const createTrace = (input) => request('/traces', { method: 'POST', body:
 export const createEvent = (traceId, event) => request(`/traces/${traceId}/events`, { method: 'POST', body: JSON.stringify(event) })
 export const completeTrace = (traceId, output) => request(`/traces/${traceId}/complete`, { method: 'POST', body: JSON.stringify({ output }) })
 export const failTrace = (traceId, errorMessage) => request(`/traces/${traceId}/fail`, { method: 'POST', body: JSON.stringify({ error_message: errorMessage }) })
+export const runAgent = (message) => request('/agent/run', { method: 'POST', body: JSON.stringify({ message }) })
+
